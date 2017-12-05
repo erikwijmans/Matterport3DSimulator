@@ -5,11 +5,10 @@ import time
 import math
 import cv2
 
-
 WIDTH = 640
 HEIGHT = 480
 VFOV = math.radians(60)
-HFOV = VFOV*WIDTH/HEIGHT
+HFOV = VFOV * WIDTH / HEIGHT
 TEXT_COLOR = [230, 40, 40]
 
 cv2.namedWindow('displaywin')
@@ -18,7 +17,6 @@ sim.setCameraResolution(WIDTH, HEIGHT)
 sim.setCameraVFOV(VFOV)
 sim.init()
 sim.newEpisode('2t7WUuJeko7', '1e6b606b44df4a6086c0f97e826d4d15', 0, 0)
-
 
 heading = 0
 elevation = 0
@@ -35,11 +33,16 @@ while True:
     origin = locations[0].point
     for idx, loc in enumerate(locations[1:]):
         # Draw actions on the screen
-        fontScale = 3.0/loc.rel_distance
-        x = int(WIDTH/2 + loc.rel_heading/HFOV*WIDTH)
-        y = int(HEIGHT/2 - loc.rel_elevation/VFOV*HEIGHT)
-        cv2.putText(im, str(idx + 1), (x, y), cv2.FONT_HERSHEY_SIMPLEX, 
-            fontScale, TEXT_COLOR, thickness=3)
+        fontScale = 3.0 / loc.rel_distance
+        x = int(WIDTH / 2 + loc.rel_heading / HFOV * WIDTH)
+        y = int(HEIGHT / 2 - loc.rel_elevation / VFOV * HEIGHT)
+        cv2.putText(
+            im,
+            str(idx + 1), (x, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale,
+            TEXT_COLOR,
+            thickness=3)
     cv2.imshow('displaywin', im)
     k = cv2.waitKey(1)
     if k == ord('q'):

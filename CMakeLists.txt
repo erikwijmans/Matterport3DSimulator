@@ -2,8 +2,9 @@ project(Matterport_Simulator CXX)
 cmake_minimum_required(VERSION 2.8)
 
 option(OSMESA_RENDERING "Render offscreen with OSMesa" OFF)
-
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+set (CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cotire/CMake")
+include(cotire)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
@@ -31,20 +32,24 @@ if(OSMESA_RENDERING)
 endif()
 target_include_directories(MatterSim PRIVATE ${JSONCPP_INCLUDE_DIRS})
 target_link_libraries(MatterSim ${JSONCPP_LIBRARIES} ${OpenCV_LIBS} ${GL_LIBS})
+cotire(MatterSim)
 
 add_executable(tests src/test/main.cpp)
 target_include_directories(tests PRIVATE ${JSONCPP_INCLUDE_DIRS})
 target_link_libraries(tests MatterSim ${JSONCPP_LIBRARIES} ${OpenCV_LIBS})
+cotire(tests)
 
 add_executable(mattersim_main src/driver/mattersim_main.cpp)
 target_link_libraries(mattersim_main MatterSim)
+cotire(mattersim_main)
 
 add_executable(random_agent src/driver/random_agent.cpp)
 target_link_libraries(random_agent MatterSim)
+cotire(random_agent)
 
 add_subdirectory(pybind11)
 
-find_package(PythonInterp 2.7)
+find_package(PythonInterp 3.6)
 message(${PYTHON_EXECUTABLE})
 
 # Need to search for python executable again to pick up an activated
@@ -64,3 +69,4 @@ target_link_libraries(MatterSimPython PRIVATE MatterSim)
 set_target_properties(MatterSimPython
   PROPERTIES
   OUTPUT_NAME MatterSim)
+cotire(MatterSimPython)
