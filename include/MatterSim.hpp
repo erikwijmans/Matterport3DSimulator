@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <eigen3/Eigen/Eigen>
+#include <Eigen/Eigen>
 #include <opencv2/opencv.hpp>
 
 #ifdef OSMESA_RENDERING
@@ -108,7 +108,8 @@ typedef std::shared_ptr<Location> LocationPtr;
 /**
  * Internal representation for bounding boxes
  */
-struct BoundingBox {
+class BoundingBox {
+public:
   //! Initialize a bounding box by the centroid, two axises and the radii in
   //! each direction.
   //! The third axis is assumed to be a0 cross a1
@@ -124,13 +125,21 @@ struct BoundingBox {
 /**
  * Representation for objects in the environment
  */
-struct Object {
-  //! object index
-  int object_idx;
-  //! region index
-  int region_idx;
-  //! mpcat40 category index
-  int cat_idx;
+class Object : public std::enable_shared_from_this<Object> {
+public:
+  Object(int _id, int _r_id, const std::string &_c_cls,
+         const std::string &_f_cls, int _r, int _g, int _b,
+         const Eigen::Vector3d &_c, const BoundingBox &_bbox)
+      : id{_id}, region_id{_r_id}, coarse_class{_c_cls}, fine_class{_f_cls},
+        r{_r}, g{_g}, b{_b}, centroid{_c}, bbox{_bbox} {}
+  //! Id this object
+  int id;
+  //! Id of the corresponding region
+  int region_id;
+  //! mpcat40 class
+  std::string coarse_class;
+  //! Freeform class from MT workers
+  std::string fine_class;
   //! Color not yet implemented!
   int r, g, b;
   //! Centroid in world coordinates
@@ -146,8 +155,9 @@ typedef std::shared_ptr<ObjectVector> ObjectVectorPtr;
 /**
  * Internal storage for axis aligned bounding boxes
  */
-struct AxisAlignedBoundingBox {
-  Eigen::Vector3d low, heigh;
+class AxisAlignedBoundingBox {
+public:
+  Eigen::Vector3d lo, hi;
   //! Tests to see if pt is in the bounding box
   bool is_in(const Eigen::Vector3d &pt);
 };
@@ -155,13 +165,17 @@ struct AxisAlignedBoundingBox {
 /**
  * Representation for regions in the environment
  */
-struct Region {
-  //! Index of the region
-  int region_idx;
+class Region : public std::enable_shared_from_this<Region> {
+public:
+  Region(int _id, int _lvl, const std::string &_t, const Eigen::Vector3d &_r,
+         const AxisAlignedBoundingBox &_b, const ObjectVectorPtr &_o)
+      : id{_id}, level{_lvl}, type{_t}, r_pos{_r}, bbox{_b}, objects{_o} {}
+  //! Id of this region
+  int id;
   //! Level of the region
-  int level_idx;
-  //! Name of the region
-  std::string region_name;
+  int level;
+  //! Region type
+  std::string type;
   //! Represetative position in world coordinates
   Eigen::Vector3d r_pos;
   //! Axis aligned bounding box in world coordinates
@@ -310,7 +324,7 @@ public:
    * Returns the list of regions associated with the current environment
    * @returns Shared pointer to a vector of shared points to regions
    */
-  RegionVectorPtr get_regions(void);
+  const std::unordered_map<int, RegionPtr> &get_regions(void);
 
 private:
   const int headingCount = 12; // 12 heading values in discretized views
@@ -354,7 +368,7 @@ private:
   std::string datasetPath;
   std::string navGraphPath;
   std::unordered_map<std::string, std::vector<LocationPtr>> scanLocations;
-  RegionVectorPtr regions;
+  std::unordered_map<int, RegionPtr> regions;
   ObjectVectorPtr objects;
 
   std::default_random_engine generator;

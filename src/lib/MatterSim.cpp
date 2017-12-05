@@ -327,7 +327,7 @@ void Simulator::loadHouse(void) {
             std::getline(ifs, line);
     }
 
-    this->regions = std::make_shared<RegionVector>();
+    this->regions.clear();
     for (int i = 0; i < nregions; ++i) {
         std::string tmp, cmd;
         ifs >> cmd;
@@ -351,16 +351,19 @@ void Simulator::loadHouse(void) {
         AxisAlignedBoundingBox bbox;
         /* clang-format off */
         ifs >> pos[0] >> pos[1] >> pos[2]
-            >> bbox.low[0] >> bbox.low[1] >> bbox.low[2]
-            >> bbox.heigh[0] >> bbox.heigh[1] >> bbox.heigh[2];
+            >> bbox.lo[0] >> bbox.lo[1] >> bbox.lo[2]
+            >> bbox.hi[0] >> bbox.hi[1] >> bbox.hi[2];
         /* clang-format on */
 
         for (int j = 0; j < 4 + 1; ++j)
             ifs >> d;
 
-        this->regions->push_back(std::make_shared<Region>(
-            Region{region_idx, level_idx, region_label, pos, bbox,
-                   std::make_shared<ObjectVector>()}));
+        if (region_label != "Z" and region_label != "-") {
+            this->regions.emplace(region_idx,
+                                  std::make_shared<Region>(
+                                      region_idx, level_idx, region_label, pos,
+                                      bbox, std::make_shared<ObjectVector>()));
+        }
     }
 
     {
@@ -373,10 +376,10 @@ void Simulator::loadHouse(void) {
             std::getline(ifs, line);
     }
 
-    std::unordered_map<int, int> cat_to_mpcat40;
+    std::unordered_map<int, std::string> cat_idx_to_mpcat40;
+    std::unordered_map<int, std::string> cat_idx_to_name;
     for (int i = 0; i < ncategories; ++i) {
         std::string tmp, cmd;
-        int label_id, mpcat40_id;
 
         ifs >> cmd;
         if (cmd != "C") {
@@ -387,15 +390,18 @@ void Simulator::loadHouse(void) {
         int cat_idx;
         ifs >> cat_idx;
 
+        int mapping_idx, mpcat40_id;
+        std::string label_name, mpcat40_name;
         // Only keep id's, not string
-        ifs >> label_id >> tmp;
-        ifs >> mpcat40_id >> tmp;
+        ifs >> mapping_idx >> label_name;
+        ifs >> mpcat40_id >> mpcat40_name;
 
         double d;
         for (int j = 0; j < 5; ++j)
             ifs >> d;
 
-        cat_to_mpcat40.emplace(cat_idx, mpcat40_id);
+        cat_idx_to_mpcat40.emplace(cat_idx, mpcat40_name);
+        cat_idx_to_name.emplace(cat_idx, label_name);
     }
 
     this->objects = std::make_shared<ObjectVector>();
@@ -423,14 +429,16 @@ void Simulator::loadHouse(void) {
         for (int j = 0; j < 8; ++j)
             ifs >> d;
 
-        BoundingBox bbox(centroid, a0, a1, radii);
+        if (this->regions.find(region_idx) != this->regions.end()) {
+            BoundingBox bbox(centroid, a0, a1, radii);
 
-        ObjectPtr o = std::make_shared<Object>(
-            Object{object_idx, region_idx, cat_to_mpcat40[category_idx], 0, 0,
-                   0, centroid, bbox});
+            ObjectPtr o = std::make_shared<Object>(
+                object_idx, region_idx, cat_idx_to_name[category_idx],
+                cat_idx_to_mpcat40[category_idx], 0, 0, 0, centroid, bbox);
 
-        this->objects->push_back(o);
-        this->regions->at(region_idx)->objects->push_back(o);
+            this->objects->push_back(o);
+            this->regions.at(region_idx)->objects->push_back(o);
+        }
     }
 
     {
@@ -446,14 +454,15 @@ void Simulator::loadHouse(void) {
 ObjectVectorPtr Simulator::get_objects(void) { return this->objects; }
 
 ObjectVectorPtr Simulator::get_objects(int region_idx) {
-    if (region_idx < 0 || region_idx >= this->regions->size()) {
-        throw std::invalid_argument("MatterSim: Region index is < 0 or >= " +
-                                    this->regions->size());
+    if (this->regions.find(region_idx) == this->regions.end()) {
+        throw std::invalid_argument("MatterSim: Region index is invalid");
     }
-    return this->regions->at(region_idx)->objects;
+    return this->regions.at(region_idx)->objects;
 }
 
-RegionVectorPtr Simulator::get_regions(void) { return this->regions; }
+const std::unordered_map<int, RegionPtr> &Simulator::get_regions(void) {
+    return this->regions;
+}
 
 void Simulator::populateNavigable() {
     std::vector<ViewpointPtr> updatedNavigable;
@@ -806,8 +815,8 @@ bool BoundingBox::is_in(const Eigen::Vector3d &pt) {
            std::abs(to_center.dot(this->a2)) <= this->radii[2];
 }
 bool AxisAlignedBoundingBox::is_in(const Eigen::Vector3d &pt) {
-    return (pt[0] >= this->low[0] && pt[0] <= this->heigh[0]) &&
-           (pt[1] >= this->low[1] && pt[1] <= this->heigh[1]) &&
-           (pt[2] >= this->low[2] && pt[2] <= this->heigh[2]);
+    return (pt[0] >= this->lo[0] && pt[0] <= this->hi[0]) &&
+           (pt[1] >= this->lo[1] && pt[1] <= this->hi[1]) &&
+           (pt[2] >= this->lo[2] && pt[2] <= this->hi[2]);
 }
 }
