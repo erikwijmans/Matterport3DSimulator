@@ -49,7 +49,7 @@ cotire(random_agent)
 
 add_subdirectory(pybind11)
 
-find_package(PythonInterp 3.6)
+find_package(PythonInterp 2.7)
 message(${PYTHON_EXECUTABLE})
 
 # Need to search for python executable again to pick up an activated
