@@ -347,22 +347,22 @@ void Simulator::loadHouse(void) {
         std::string region_label;
         ifs >> region_label;
 
-        Eigen::Vector3d pos;
-        AxisAlignedBoundingBox bbox;
+        Eigen::Vector3d pos, lo, hi;
         /* clang-format off */
         ifs >> pos[0] >> pos[1] >> pos[2]
-            >> bbox.lo[0] >> bbox.lo[1] >> bbox.lo[2]
-            >> bbox.hi[0] >> bbox.hi[1] >> bbox.hi[2];
+            >> lo[0] >> lo[1] >> lo[2]
+            >> hi[0] >> hi[1] >> hi[2];
         /* clang-format on */
 
         for (int j = 0; j < 4 + 1; ++j)
             ifs >> d;
 
         if (region_label != "Z" and region_label != "-") {
-            this->regions.emplace(region_idx,
-                                  std::make_shared<Region>(
-                                      region_idx, level_idx, region_label, pos,
-                                      bbox, std::make_shared<ObjectVector>()));
+            this->regions.emplace(
+                region_idx,
+                std::make_shared<Region>(region_idx, level_idx, region_label,
+                                         pos, BoundingBox::AxisAligned(lo, hi),
+                                         std::make_shared<ObjectVector>()));
         }
     }
 
@@ -814,9 +814,12 @@ bool BoundingBox::is_in(const Eigen::Vector3d &pt) {
            std::abs(to_center.dot(this->a1)) <= this->radii[1] &&
            std::abs(to_center.dot(this->a2)) <= this->radii[2];
 }
-bool AxisAlignedBoundingBox::is_in(const Eigen::Vector3d &pt) {
-    return (pt[0] >= this->lo[0] && pt[0] <= this->hi[0]) &&
-           (pt[1] >= this->lo[1] && pt[1] <= this->hi[1]) &&
-           (pt[2] >= this->lo[2] && pt[2] <= this->hi[2]);
+
+BoundingBox BoundingBox::AxisAligned(const Eigen::Vector3d &lo,
+                                     const Eigen::Vector3d &hi) {
+    auto radii = (hi - lo) / 2;
+    auto centroid = (hi + lo) / 2;
+    return BoundingBox(centroid, Eigen::Vector3d::UnitX(),
+                       Eigen::Vector3d::UnitY(), radii);
 }
 }

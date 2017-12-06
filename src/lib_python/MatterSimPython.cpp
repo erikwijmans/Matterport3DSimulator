@@ -87,7 +87,7 @@ public:
   int level;
   std::string type;
   Eigen::Vector3d r_pos;
-  AxisAlignedBoundingBox bbox;
+  BoundingBox bbox;
   py::list objects;
 };
 
@@ -192,9 +192,6 @@ PYBIND11_MODULE(MatterSim, m) {
       .def_readonly("b", &Object::b)
       .def_readonly("centroid", &Object::centroid)
       .def_readonly("bbox", &Object::bbox);
-  py::class_<AxisAlignedBoundingBox>(m, "AxisAlignedBoundingBox")
-      .def_readonly("min", &AxisAlignedBoundingBox::lo)
-      .def_readonly("max", &AxisAlignedBoundingBox::hi);
   py::class_<RegionPython>(m, "Region")
       .def_readonly("id", &RegionPython::id)
       .def_readonly("level", &RegionPython::level)

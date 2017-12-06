@@ -115,6 +115,11 @@ public:
   //! The third axis is assumed to be a0 cross a1
   BoundingBox(const Eigen::Vector3d &c, const Eigen::Vector3d &_a0,
               const Eigen::Vector3d &_a1, const Eigen::Vector3d &_r);
+
+  //! Create a bounding box from an axis aligned bbox
+  static BoundingBox AxisAligned(const Eigen::Vector3d &lo,
+                                 const Eigen::Vector3d &hi);
+
   //! Tests to see if pt is in the bounding box
   bool is_in(const Eigen::Vector3d &pt);
   Eigen::Vector3d centroid;
@@ -153,22 +158,12 @@ typedef std::vector<ObjectPtr> ObjectVector;
 typedef std::shared_ptr<ObjectVector> ObjectVectorPtr;
 
 /**
- * Internal storage for axis aligned bounding boxes
- */
-class AxisAlignedBoundingBox {
-public:
-  Eigen::Vector3d lo, hi;
-  //! Tests to see if pt is in the bounding box
-  bool is_in(const Eigen::Vector3d &pt);
-};
-
-/**
  * Representation for regions in the environment
  */
 class Region : public std::enable_shared_from_this<Region> {
 public:
   Region(int _id, int _lvl, const std::string &_t, const Eigen::Vector3d &_r,
-         const AxisAlignedBoundingBox &_b, const ObjectVectorPtr &_o)
+         const BoundingBox &_b, const ObjectVectorPtr &_o)
       : id{_id}, level{_lvl}, type{_t}, r_pos{_r}, bbox{_b}, objects{_o} {}
   //! Id of this region
   int id;
@@ -179,7 +174,7 @@ public:
   //! Represetative position in world coordinates
   Eigen::Vector3d r_pos;
   //! Axis aligned bounding box in world coordinates
-  AxisAlignedBoundingBox bbox;
+  BoundingBox bbox;
   //! All objects associated with the region
   ObjectVectorPtr objects;
 };
