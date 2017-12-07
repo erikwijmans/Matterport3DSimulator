@@ -17,6 +17,20 @@ sim.setCameraResolution(WIDTH, HEIGHT)
 sim.setCameraVFOV(VFOV)
 sim.init()
 sim.newEpisode('2t7WUuJeko7', '1e6b606b44df4a6086c0f97e826d4d15', 0, 0)
+objects = sim.get_objects()
+key_idx = 0
+obj_keys = list(objects)
+
+
+def set_new_obj(key_idx):
+    obj_idx = obj_keys[key_idx]
+    print("Fine: {}".format(objects[obj_idx].fine_class), "Coarse: {}".format(
+        objects[obj_idx].coarse_class), "Color: {}, {}, {}".format(
+            objects[obj_idx].color.r, objects[obj_idx].color.g,
+            objects[obj_idx].color.b))
+    sim.set_location_by_object(objects[obj_idx])
+
+set_new_obj(key_idx)
 
 heading = 0
 elevation = 0
@@ -59,3 +73,6 @@ while True:
         heading = ANGLEDELTA
     elif k == 84 or k == ord('s'):
         elevation = -ANGLEDELTA
+    elif k == ord('n'):
+        key_idx = (key_idx + 1) % len(obj_keys)
+        set_new_obj(key_idx)

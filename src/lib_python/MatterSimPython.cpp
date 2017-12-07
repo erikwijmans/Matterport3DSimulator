@@ -78,8 +78,8 @@ public:
   RegionPython(RegionPtr r)
       : id{r->id}, level{r->level}, type{r->type}, r_pos{r->r_pos},
         bbox{r->bbox} {
-    for (auto &obj : *r->objects) {
-      objects.append(obj);
+    for (auto &p : r->objects) {
+      objects.append(p.second);
     }
   }
 
@@ -128,26 +128,18 @@ public:
   void makeAction(int index, double heading, double elevation) {
     sim.makeAction(index, heading, elevation);
   }
-  py::list get_objects(void) {
-    py::list objs;
-    for (auto &obj : *sim.get_objects()) {
-      objs.append(obj);
-    }
-    return objs;
+  const std::unordered_map<int, ObjectPtr> &get_objects(void) {
+    return sim.get_objects();
   }
-  py::list get_objects_by_id(int region_id) {
-    py::list objs;
-    for (auto &obj : *sim.get_objects(region_id)) {
-      objs.append(obj);
-    }
-    return objs;
+  const std::unordered_map<int, ObjectPtr> &get_objects_by_id(int region_id) {
+    return sim.get_objects(region_id);
   }
-  py::list get_regions(void) {
-    py::list rgns;
-    for (auto &it : sim.get_regions()) {
-      rgns.append(RegionPython(it.second));
-    }
-    return rgns;
+  const std::unordered_map<int, RegionPtr> get_regions(void) {
+    return sim.get_regions();
+  }
+
+  void set_location_by_object(ObjectPtr obj) {
+    sim.set_location_by_object(obj);
   }
 
   void close() { sim.close(); }
@@ -182,23 +174,26 @@ PYBIND11_MODULE(MatterSim, m) {
       .def_readonly("a1", &BoundingBox::a1)
       .def_readonly("a2", &BoundingBox::a2)
       .def_readonly("radii", &BoundingBox::radii);
-  py::class_<Object, ObjectPtr>(m, "Object")
+  py::class_<RGBHolder>(m, "RGBHolder")
+      .def_readonly("r", &RGBHolder::r)
+      .def_readonly("b", &RGBHolder::b)
+      .def_readonly("g", &RGBHolder::g);
+  py::class_<Object, ObjectPtr>(m, "SimObject")
       .def_readonly("id", &Object::id)
       .def_readonly("region_id", &Object::region_id)
       .def_readonly("coarse_class", &Object::coarse_class)
       .def_readonly("fine_class", &Object::fine_class)
-      .def_readonly("r", &Object::r)
-      .def_readonly("g", &Object::g)
-      .def_readonly("b", &Object::b)
+      .def_readonly("color", &Object::color)
       .def_readonly("centroid", &Object::centroid)
       .def_readonly("bbox", &Object::bbox);
-  py::class_<RegionPython>(m, "Region")
-      .def_readonly("id", &RegionPython::id)
-      .def_readonly("level", &RegionPython::level)
-      .def_readonly("type", &RegionPython::type)
-      .def_readonly("r_pos", &RegionPython::r_pos)
-      .def_readonly("bbox", &RegionPython::bbox)
-      .def_readonly("objects", &RegionPython::objects);
+  py::class_<Region, RegionPtr>(m, "SimRegion")
+      .def_readonly("id", &Region::id)
+      .def_readonly("level", &Region::level)
+      .def_readonly("type", &Region::type)
+      .def_readonly("r_pos", &Region::r_pos)
+      .def_readonly("bbox", &Region::bbox)
+      .def_readonly("objects", &Region::objects)
+      .def_readonly("viewpoints", &Region::viewpoints);
   py::class_<SimulatorPython>(m, "Simulator")
       .def(py::init<>())
       .def("setDatasetPath", &SimulatorPython::setDatasetPath)
@@ -218,5 +213,6 @@ PYBIND11_MODULE(MatterSim, m) {
       .def("get_objects", &SimulatorPython::get_objects)
       .def("get_objects_by_id", &SimulatorPython::get_objects_by_id)
       .def("get_regions", &SimulatorPython::get_regions)
+      .def("set_location_by_object", &SimulatorPython::set_location_by_object)
       .def("close", &SimulatorPython::close);
 }

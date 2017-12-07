@@ -6,6 +6,57 @@
 #include "Benchmark.hpp"
 #include "MatterSim.hpp"
 #include <json/json.h>
+#include <tinyply.h>
+
+mattersim::RGBHolder
+average_color(const std::vector<mattersim::RGBHolder> &colors) {
+    Eigen::Matrix3d rgb2ycrcb;
+    rgb2ycrcb << 0.299, 0.587, 0.144, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081;
+    Eigen::Vector3d offset(0, 128, 128);
+    Eigen::Vector3d accum = Eigen::Vector3d::Zero();
+    for (auto &c : colors) {
+        accum += offset + rgb2ycrcb * Eigen::Vector3d(c.r, c.g, c.b);
+    }
+    accum /= colors.size();
+    // accum = rgb2ycrcb.inverse() * (accum - offset);
+    accum.unaryExpr([](double d) { return std::min(255.0, std::max(d, 0.0)); });
+    return mattersim::RGBHolder(accum[0], accum[1], accum[2]);
+}
+mattersim::RGBHolder
+mode_color(const std::vector<mattersim::RGBHolder> &colors) {
+    constexpr double bin_size = 5;
+    auto rgb_count = std::map<
+        Eigen::Vector3i, int,
+        std::function<bool(const Eigen::Vector3i &, const Eigen::Vector3i &)>>{
+        [](const Eigen::Vector3i &a, const Eigen::Vector3i &b) {
+            return a[0] < b[0] ||
+                   (a[0] == b[0] &&
+                    (a[1] < b[1] || (a[1] == b[1] && a[2] < b[2])));
+        }};
+    for (auto &c : colors) {
+        auto key = Eigen::Vector3i(c.r, c.b, c.g);
+        key.unaryExpr([](int i) { return static_cast<int>(i / bin_size); });
+        auto it = rgb_count.find(key);
+        if (it == rgb_count.end()) {
+            rgb_count.emplace(key, 1);
+        } else {
+            it->second += 1;
+        }
+    }
+    Eigen::Vector3i best_key;
+    int best_c = 0;
+    for (auto &p : rgb_count) {
+        if (p.second > best_c) {
+            best_key = p.first;
+            best_c = p.second;
+        }
+    }
+
+    best_key.unaryExpr([](int i) {
+        return std::max(0, std::min(static_cast<int>(i * bin_size), 255));
+    });
+    return mattersim::RGBHolder(best_key[0], best_key[1], best_key[2]);
+}
 
 namespace mattersim {
 
@@ -277,12 +328,13 @@ void Simulator::loadLocationGraph() {
 void Simulator::loadHouse(void) {
     const auto datafolder =
         datasetPath + "/v1/scans/" + state->scanId + "/house_segmentations/";
-    const auto filename = datafolder + state->scanId + ".house";
+    const auto house_filename = datafolder + state->scanId + ".house";
+    const auto ply_filename = datafolder + state->scanId + ".ply";
 
-    std::ifstream ifs(filename, std::ios::in);
-    if (!ifs.is_open()) {
+    std::ifstream ifs(house_filename, std::ios::in);
+    if (ifs.fail()) {
         throw std::invalid_argument("MatterSim: Could not open house file: \"" +
-                                    filename + "\"");
+                                    house_filename + "\"");
     }
 
     int nimages, npanoramas, nvertices, nsurfaces, nsegments, nobjects,
@@ -292,7 +344,8 @@ void Simulator::loadHouse(void) {
     ifs >> type >> version;
     if (type != "ASCII") {
         throw std::invalid_argument("MatterSim: Could not read file \"" +
-                                    filename + "\" of type \"" + type + "\"");
+                                    house_filename + "\" of type \"" + type +
+                                    "\"");
     }
 
     if (version == "1.0") {
@@ -358,11 +411,10 @@ void Simulator::loadHouse(void) {
             ifs >> d;
 
         if (region_label != "Z" and region_label != "-") {
-            this->regions.emplace(
-                region_idx,
-                std::make_shared<Region>(region_idx, level_idx, region_label,
-                                         pos, BoundingBox::AxisAligned(lo, hi),
-                                         std::make_shared<ObjectVector>()));
+            this->regions.emplace(region_idx,
+                                  std::make_shared<Region>(
+                                      region_idx, level_idx, region_label, pos,
+                                      BoundingBox::AxisAligned(lo, hi)));
         }
     }
 
@@ -370,9 +422,39 @@ void Simulator::loadHouse(void) {
         std::string line;
         // Eat the hanging "\n"
         std::getline(ifs, line);
-        // Trash the portals, surfaces, vertices, panoramas and images for now
-        for (int i = 0;
-             i < nportals + nsurfaces + nvertices + npanoramas + nimages; ++i)
+        // Trash the portals, surfaces, vertices
+        for (int i = 0; i < nportals + nsurfaces + nvertices; ++i)
+            std::getline(ifs, line);
+    }
+
+    for (int i = 0; i < npanoramas; ++i) {
+        std::string cmd, tmp;
+        double d;
+        ifs >> cmd;
+        if (cmd != "P") {
+            throw std::invalid_argument(
+                "MatterSim: Tried to read a panorama, but got an \"" + cmd +
+                "\"");
+        }
+
+        std::string panorama_name;
+        int region_idx;
+        ifs >> panorama_name >> d >> region_idx;
+
+        for (int j = 0; j < 9; ++j)
+            ifs >> d;
+
+        if (this->regions.find(region_idx) != this->regions.end()) {
+            this->regions[region_idx]->viewpoints.emplace(panorama_name);
+        }
+    }
+
+    {
+        std::string line;
+        // Eat the hanging "\n"
+        std::getline(ifs, line);
+        // Trash the images
+        for (int i = 0; i < nimages; ++i)
             std::getline(ifs, line);
     }
 
@@ -404,7 +486,7 @@ void Simulator::loadHouse(void) {
         cat_idx_to_name.emplace(cat_idx, label_name);
     }
 
-    this->objects = std::make_shared<ObjectVector>();
+    this->objects.clear();
     for (int i = 0; i < nobjects; ++i) {
         std::string tmp, cmd;
         ifs >> cmd;
@@ -434,26 +516,76 @@ void Simulator::loadHouse(void) {
 
             ObjectPtr o = std::make_shared<Object>(
                 object_idx, region_idx, cat_idx_to_name[category_idx],
-                cat_idx_to_mpcat40[category_idx], 0, 0, 0, centroid, bbox);
+                cat_idx_to_mpcat40[category_idx], centroid, bbox);
 
-            this->objects->push_back(o);
-            this->regions.at(region_idx)->objects->push_back(o);
+            this->objects.emplace(object_idx, o);
+            this->regions.at(region_idx)->objects.emplace(object_idx, o);
         }
     }
 
-    {
-        std::string line;
-        // Eat the hanging "\n"
-        std::getline(ifs, line);
-        // Trash the segments for now
-        for (int i = 0; i < nsegments; ++i)
-            std::getline(ifs, line);
+#if 1
+    std::unordered_map<int, std::vector<int>> obj_id_to_segments;
+    for (int i = 0; i < nsegments; ++i) {
+        std::string cmd, tmp;
+        ifs >> cmd;
+        if (cmd != "E") {
+            throw std::invalid_argument(
+                "MatterSim: Tried to read a segment, but got an \"" + cmd +
+                "\"");
+        }
+        int segment_idx, object_idx;
+        ifs >> segment_idx >> object_idx;
+        obj_id_to_segments[object_idx].push_back(segment_idx);
+
+        ifs >> tmp >> tmp;
+        double d;
+        for (int j = 0; j < 14; ++j)
+            ifs >> d;
     }
+
+    std::ifstream ply_in(ply_filename, std::ios::in | std::ios::binary);
+    if (ply_in.fail()) {
+        throw std::invalid_argument("MatterSim: Could not open ply file: \"" +
+                                    ply_filename + "\"");
+    }
+    tinyply::PlyFile ply_file;
+    ply_file.parse_header(ply_in);
+
+    std::shared_ptr<tinyply::PlyData> ply_colors =
+        ply_file.request_properties_from_element("vertex",
+                                                 {"red", "green", "blue"});
+    ply_file.read(ply_in);
+
+    std::vector<RGBHolder> seg_colors(ply_colors->count);
+    std::memcpy(seg_colors.data(), ply_colors->buffer.get(),
+                ply_colors->buffer.size_bytes());
+
+    std::unordered_map<int, std::vector<RGBHolder>> obj_id_to_segment_colors;
+    for (const auto &p : obj_id_to_segments) {
+        auto &k = p.first;
+        auto &segs = p.second;
+
+        auto it =
+            obj_id_to_segment_colors.emplace(k, std::vector<RGBHolder>()).first;
+        for (auto &s : segs) {
+            it->second.emplace_back(seg_colors[s]);
+        }
+    }
+
+    for (const auto &p : obj_id_to_segment_colors) {
+        auto &k = p.first;
+        auto &colors = p.second;
+        this->objects[k]->color = mode_color(colors);
+    }
+#endif
 }
 
-ObjectVectorPtr Simulator::get_objects(void) { return this->objects; }
+const std::unordered_map<int, ObjectPtr> &Simulator::get_objects(void) {
+    return this->objects;
+}
 
-ObjectVectorPtr Simulator::get_objects(int region_idx) {
+const std::unordered_map<int, ObjectPtr> &
+Simulator::get_objects(int region_idx) {
     if (this->regions.find(region_idx) == this->regions.end()) {
         throw std::invalid_argument("MatterSim: Region index is invalid");
     }
@@ -462,6 +594,55 @@ ObjectVectorPtr Simulator::get_objects(int region_idx) {
 
 const std::unordered_map<int, RegionPtr> &Simulator::get_regions(void) {
     return this->regions;
+}
+
+void Simulator::set_location_by_object(const ObjectPtr obj) {
+    if (!initialized) {
+        std::stringstream msg;
+        msg << "MatterSim: Simulator is not initialized!";
+        throw std::domain_error(msg.str());
+    }
+    auto &centroid = obj->centroid;
+    auto &region = this->regions[obj->region_id];
+    LocationPtr closest_location = nullptr;
+    double best_dist = 1e38;
+    constexpr double min_dist = 1.0;
+    for (auto &location : scanLocations[state->scanId]) {
+        if (location->included &&
+            region->viewpoints.find(location->viewpointId) !=
+                region->viewpoints.end()) {
+            Eigen::Vector3d pos(location->pos[0], location->pos[1],
+                                location->pos[2]);
+
+            double dist = (pos - centroid).norm();
+            double xy_dist = (Eigen::Vector2d(pos[0], pos[1]) -
+                              Eigen::Vector2d(centroid[0], centroid[1]))
+                                 .norm();
+            if (dist < best_dist && xy_dist >= min_dist) {
+                best_dist = dist;
+                closest_location = location;
+            }
+        }
+    }
+
+    if (closest_location == nullptr) {
+        throw std::runtime_error(
+            "MatterSim: Could not find a suitable viewport for object " +
+            obj->id);
+    }
+
+    Eigen::Vector3d gaze_vector =
+        (centroid - Eigen::Vector3d(closest_location->pos[0],
+                                    closest_location->pos[1],
+                                    closest_location->pos[2]))
+            .normalized();
+    double elevation = std::atan2(
+        gaze_vector[2], Eigen::Vector2d(gaze_vector[0], gaze_vector[1]).norm());
+    double heading = std::atan2(gaze_vector[0], gaze_vector[1]);
+    current_object = obj;
+
+    this->newEpisode(state->scanId, closest_location->viewpointId, heading,
+                     elevation);
 }
 
 void Simulator::populateNavigable() {
@@ -686,6 +867,7 @@ void Simulator::renderScene() {
         scanLocations[state->scanId][state->location->ix]->cubemap_texture);
     glDrawElements(GL_QUADS, sizeof(cube_indices) / sizeof(GLushort),
                    GL_UNSIGNED_SHORT, 0);
+
     cv::Mat img(height, width, CV_8UC3);
     // use fast 4-byte alignment (default anyway) if possible
     glPixelStorei(GL_PACK_ALIGNMENT, (img.step & 3) ? 1 : 4);
@@ -813,6 +995,35 @@ bool BoundingBox::is_in(const Eigen::Vector3d &pt) {
     return std::abs(to_center.dot(this->a0)) <= this->radii[0] &&
            std::abs(to_center.dot(this->a1)) <= this->radii[1] &&
            std::abs(to_center.dot(this->a2)) <= this->radii[2];
+}
+
+std::shared_ptr<std::vector<Eigen::Vector3d>> BoundingBox::corners() {
+    auto corners = std::make_shared<std::vector<Eigen::Vector3d>>();
+    corners->resize(8);
+
+    corners->at(0) = -this->a0 * this->radii[0] - this->a1 * this->radii[1] -
+                     this->a2 * this->radii[2];
+    corners->at(1) = -this->a0 * this->radii[0] - this->a1 * this->radii[1] +
+                     this->a2 * this->radii[2];
+    corners->at(2) = -this->a0 * this->radii[0] + this->a1 * this->radii[1] +
+                     this->a2 * this->radii[2];
+    corners->at(3) = -this->a0 * this->radii[0] + this->a1 * this->radii[1] -
+                     this->a2 * this->radii[2];
+
+    corners->at(4) = this->a0 * this->radii[0] - this->a1 * this->radii[1] -
+                     this->a2 * this->radii[2];
+    corners->at(5) = this->a0 * this->radii[0] - this->a1 * this->radii[1] +
+                     this->a2 * this->radii[2];
+    corners->at(6) = this->a0 * this->radii[0] + this->a1 * this->radii[1] +
+                     this->a2 * this->radii[2];
+    corners->at(7) = this->a0 * this->radii[0] + this->a1 * this->radii[1] -
+                     this->a2 * this->radii[2];
+
+    for (auto &c : *corners) {
+        c += this->centroid;
+    }
+
+    return corners;
 }
 
 BoundingBox BoundingBox::AxisAligned(const Eigen::Vector3d &lo,

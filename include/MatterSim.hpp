@@ -6,6 +6,7 @@
 #include <random>
 #include <time.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <Eigen/Eigen>
@@ -120,11 +121,22 @@ public:
   static BoundingBox AxisAligned(const Eigen::Vector3d &lo,
                                  const Eigen::Vector3d &hi);
 
+  //! Returns corners of the bounding box
+  std::shared_ptr<std::vector<Eigen::Vector3d>> corners(void);
+
   //! Tests to see if pt is in the bounding box
   bool is_in(const Eigen::Vector3d &pt);
   Eigen::Vector3d centroid;
   Eigen::Vector3d a0, a1, a2;
   Eigen::Vector3d radii;
+};
+
+class RGBHolder {
+public:
+  RGBHolder() : r{0}, g{0}, b{0} {};
+  RGBHolder(unsigned char _r, unsigned char _g, unsigned char _b)
+      : r{_r}, g{_g}, b{_b} {}
+  unsigned char r, g, b;
 };
 
 /**
@@ -133,10 +145,10 @@ public:
 class Object : public std::enable_shared_from_this<Object> {
 public:
   Object(int _id, int _r_id, const std::string &_c_cls,
-         const std::string &_f_cls, int _r, int _g, int _b,
-         const Eigen::Vector3d &_c, const BoundingBox &_bbox)
+         const std::string &_f_cls, const Eigen::Vector3d &_c,
+         const BoundingBox &_bbox, const RGBHolder &_color = RGBHolder())
       : id{_id}, region_id{_r_id}, coarse_class{_c_cls}, fine_class{_f_cls},
-        r{_r}, g{_g}, b{_b}, centroid{_c}, bbox{_bbox} {}
+        color{_color}, centroid{_c}, bbox{_bbox} {}
   //! Id this object
   int id;
   //! Id of the corresponding region
@@ -146,7 +158,7 @@ public:
   //! Freeform class from MT workers
   std::string fine_class;
   //! Color not yet implemented!
-  int r, g, b;
+  RGBHolder color;
   //! Centroid in world coordinates
   Eigen::Vector3d centroid;
   //! Bounding box in world coordinates
@@ -163,8 +175,8 @@ typedef std::shared_ptr<ObjectVector> ObjectVectorPtr;
 class Region : public std::enable_shared_from_this<Region> {
 public:
   Region(int _id, int _lvl, const std::string &_t, const Eigen::Vector3d &_r,
-         const BoundingBox &_b, const ObjectVectorPtr &_o)
-      : id{_id}, level{_lvl}, type{_t}, r_pos{_r}, bbox{_b}, objects{_o} {}
+         const BoundingBox &_b)
+      : id{_id}, level{_lvl}, type{_t}, r_pos{_r}, bbox{_b} {}
   //! Id of this region
   int id;
   //! Level of the region
@@ -176,7 +188,9 @@ public:
   //! Axis aligned bounding box in world coordinates
   BoundingBox bbox;
   //! All objects associated with the region
-  ObjectVectorPtr objects;
+  std::unordered_map<int, ObjectPtr> objects;
+  //! All viewpoints names that are in this region
+  std::unordered_set<std::string> viewpoints;
 };
 
 typedef std::shared_ptr<Region> RegionPtr;
@@ -305,7 +319,7 @@ public:
    * Returns the list of objects associated with the current environment
    * @returns Shared pointer to a vector of shared points to objects
    */
-  ObjectVectorPtr get_objects(void);
+  const std::unordered_map<int, ObjectPtr> &get_objects(void);
 
   /**
    * Returns the list of objects associated with the current environment for a
@@ -313,13 +327,19 @@ public:
    * @param region_idx - The index of the region
    * @returns Shared pointer to a vector of shared points to objects
    */
-  ObjectVectorPtr get_objects(int region_idx);
+  const std::unordered_map<int, ObjectPtr> &get_objects(int region_idx);
 
   /**
    * Returns the list of regions associated with the current environment
    * @returns Shared pointer to a vector of shared points to regions
    */
   const std::unordered_map<int, RegionPtr> &get_regions(void);
+
+  /**
+   * Sets the location of the simulator so the object is in view.
+   * THIS RESET THE EPISODE
+   */
+  void set_location_by_object(const ObjectPtr obj);
 
 private:
   const int headingCount = 12; // 12 heading values in discretized views
@@ -364,7 +384,8 @@ private:
   std::string navGraphPath;
   std::unordered_map<std::string, std::vector<LocationPtr>> scanLocations;
   std::unordered_map<int, RegionPtr> regions;
-  ObjectVectorPtr objects;
+  std::unordered_map<int, ObjectPtr> objects;
+  ObjectPtr current_object = nullptr;
 
   std::default_random_engine generator;
   Timer cpuLoadTimer;

@@ -2,7 +2,7 @@ project(Matterport_Simulator CXX)
 cmake_minimum_required(VERSION 2.8)
 
 option(OSMESA_RENDERING "Render offscreen with OSMesa" OFF)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fPIC")
 set (CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cotire/CMake")
 include(cotire)
 
@@ -11,6 +11,9 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 include_directories("${PROJECT_SOURCE_DIR}/include")
+
+add_subdirectory(tinyply)
+include_directories("${PROJECT_SOURCE_DIR}/tinyply/source")
 
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -31,7 +34,7 @@ if(OSMESA_RENDERING)
   target_compile_definitions(MatterSim PUBLIC "-DOSMESA_RENDERING")
 endif()
 target_include_directories(MatterSim PRIVATE ${JSONCPP_INCLUDE_DIRS})
-target_link_libraries(MatterSim ${JSONCPP_LIBRARIES} ${OpenCV_LIBS} ${GL_LIBS})
+target_link_libraries(MatterSim ${JSONCPP_LIBRARIES} ${OpenCV_LIBS} ${GL_LIBS} tinyply)
 cotire(MatterSim)
 
 add_executable(tests src/test/main.cpp)
