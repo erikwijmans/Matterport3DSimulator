@@ -173,7 +173,8 @@ PYBIND11_MODULE(MatterSim, m) {
       .def_readonly("a0", &BoundingBox::a0)
       .def_readonly("a1", &BoundingBox::a1)
       .def_readonly("a2", &BoundingBox::a2)
-      .def_readonly("radii", &BoundingBox::radii);
+      .def_readonly("radii", &BoundingBox::radii)
+      .def("is_in", &BoundingBox::is_in);
   py::class_<RGBHolder>(m, "RGBHolder")
       .def_readonly("r", &RGBHolder::r)
       .def_readonly("b", &RGBHolder::b)

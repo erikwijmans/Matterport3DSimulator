@@ -511,19 +511,22 @@ void Simulator::loadHouse(void) {
         for (int j = 0; j < 8; ++j)
             ifs >> d;
 
-        if (this->regions.find(region_idx) != this->regions.end()) {
+        std::string &fine_class = cat_idx_to_name[category_idx],
+                    &coarse_class = cat_idx_to_mpcat40[category_idx];
+        if (this->regions.find(region_idx) != this->regions.end() &&
+            fine_class.length() != 0 && coarse_class.length() != 0) {
             BoundingBox bbox(centroid, a0, a1, radii);
 
-            ObjectPtr o = std::make_shared<Object>(
-                object_idx, region_idx, cat_idx_to_name[category_idx],
-                cat_idx_to_mpcat40[category_idx], centroid, bbox);
+            ObjectPtr o =
+                std::make_shared<Object>(object_idx, region_idx, fine_class,
+                                         coarse_class, centroid, bbox);
 
             this->objects.emplace(object_idx, o);
             this->regions.at(region_idx)->objects.emplace(object_idx, o);
         }
     }
 
-#if 1
+#if 0
     std::unordered_map<int, std::vector<int>> obj_id_to_segments;
     for (int i = 0; i < nsegments; ++i) {
         std::string cmd, tmp;
@@ -974,19 +977,20 @@ BoundingBox::BoundingBox(const Eigen::Vector3d &c, const Eigen::Vector3d &_a0,
 
     a2 = a0.cross(a1).normalized();
 
-    if (radii[1] > radii[0]) {
+    if (std::abs(a1[0]) > std::abs(a0[0])) {
         std::swap(a0, a1);
         std::swap(radii[0], radii[1]);
     }
-    if (radii[2] > radii[0]) {
+    if (std::abs(a2[0]) > std::abs(a0[0])) {
         std::swap(a0, a2);
         std::swap(radii[0], radii[2]);
     }
-    if (radii[2] > radii[1]) {
+    if (std::abs(a2[1]) > std::abs(a1[1])) {
         std::swap(a1, a2);
         std::swap(radii[1], radii[2]);
     }
 
+    // Ensure right handed coordinate system
     a2 = a0.cross(a1).normalized();
 }
 
