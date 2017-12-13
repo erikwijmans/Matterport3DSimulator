@@ -4,6 +4,3 @@
 [submodule "cotire"]
 	path = cotire
 	url = git@github.com:sakra/cotire.git
-[submodule "tinyply"]
-	path = tinyply
-	url = git@github.com:ddiakopoulos/tinyply.git

@@ -26,6 +26,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "Benchmark.hpp"
+#include "ReadPly.hpp"
 
 namespace mattersim {
 struct Viewpoint {
@@ -134,9 +135,8 @@ public:
 class RGBHolder {
 public:
   RGBHolder() : r{0}, g{0}, b{0} {};
-  RGBHolder(unsigned char _r, unsigned char _g, unsigned char _b)
-      : r{_r}, g{_g}, b{_b} {}
-  unsigned char r, g, b;
+  RGBHolder(double _r, double _g, double _b) : r{_r}, g{_g}, b{_b} {}
+  double r, g, b;
 };
 
 /**
@@ -386,6 +386,10 @@ private:
   std::unordered_map<int, RegionPtr> regions;
   std::unordered_map<int, ObjectPtr> objects;
   ObjectPtr current_object = nullptr;
+  std::unordered_map<int, std::vector<ply::Face::Ptr>> obj_id_to_faces;
+  std::unordered_map<int, std::vector<std::array<Eigen::Vector3f, 3>>>
+      obj_id_to_triangles;
+  std::unordered_map<int, std::vector<RGBHolder>> obj_id_to_colors;
 
   std::default_random_engine generator;
   Timer cpuLoadTimer;

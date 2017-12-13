@@ -2,7 +2,7 @@ project(Matterport_Simulator CXX)
 cmake_minimum_required(VERSION 2.8)
 
 option(OSMESA_RENDERING "Render offscreen with OSMesa" OFF)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fPIC")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fPIC -g")
 set (CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cotire/CMake")
 include(cotire)
 
@@ -12,11 +12,10 @@ endif()
 
 include_directories("${PROJECT_SOURCE_DIR}/include")
 
-add_subdirectory(tinyply)
-include_directories("${PROJECT_SOURCE_DIR}/tinyply/source")
 
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(CUDA REQUIRED)
 
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
@@ -29,12 +28,16 @@ else()
   set(GL_LIBS ${OPENGL_LIBRARIES} ${GLEW_LIBRARIES})
 endif()
 
-add_library(MatterSim SHARED src/lib/MatterSim.cpp src/lib/Benchmark.cpp)
+cuda_add_library(RayTracer SHARED src/lib/RayTracer.cu)
+target_link_libraries(RayTracer ${CUDA_LIBRARIES} ${OpenCV_LIBS})
+cotire(RayTracer)
+
+add_library(MatterSim SHARED src/lib/MatterSim.cpp src/lib/Benchmark.cpp src/lib/ReadPly.cpp)
 if(OSMESA_RENDERING)
   target_compile_definitions(MatterSim PUBLIC "-DOSMESA_RENDERING")
 endif()
 target_include_directories(MatterSim PRIVATE ${JSONCPP_INCLUDE_DIRS})
-target_link_libraries(MatterSim ${JSONCPP_LIBRARIES} ${OpenCV_LIBS} ${GL_LIBS} tinyply)
+target_link_libraries(MatterSim RayTracer ${JSONCPP_LIBRARIES} ${OpenCV_LIBS} ${GL_LIBS})
 cotire(MatterSim)
 
 add_executable(tests src/test/main.cpp)

@@ -5,26 +5,45 @@
 
 #include "Benchmark.hpp"
 #include "MatterSim.hpp"
+#include "RayTracer.hpp"
+#include "ReadPly.hpp"
 #include <json/json.h>
-#include <tinyply.h>
+
+template <class T>
+Eigen::Matrix<T, 4, 4> perspective(double radf, double aspect, double zNear,
+                                   double zFar) {
+    typedef Eigen::Matrix<T, 4, 4> Matrix4;
+
+    assert(aspect > 0);
+    assert(zFar > zNear);
+
+    double tanHalfFovy = tan(radf / 2.0);
+    Matrix4 res = Matrix4::Zero();
+    res(0, 0) = 1.0 / (aspect * tanHalfFovy);
+    res(1, 1) = 1.0 / (tanHalfFovy);
+    res(2, 2) = -(zFar + zNear) / (zFar - zNear);
+    res(3, 2) = -1.0;
+    res(2, 3) = -(2.0 * zFar * zNear) / (zFar - zNear);
+    return res;
+}
 
 mattersim::RGBHolder
 average_color(const std::vector<mattersim::RGBHolder> &colors) {
     Eigen::Matrix3d rgb2ycrcb;
     rgb2ycrcb << 0.299, 0.587, 0.144, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081;
-    Eigen::Vector3d offset(0, 128, 128);
+    Eigen::Vector3d offset(0, 0.5, 0.5);
     Eigen::Vector3d accum = Eigen::Vector3d::Zero();
     for (auto &c : colors) {
         accum += offset + rgb2ycrcb * Eigen::Vector3d(c.r, c.g, c.b);
     }
     accum /= colors.size();
-    // accum = rgb2ycrcb.inverse() * (accum - offset);
-    accum.unaryExpr([](double d) { return std::min(255.0, std::max(d, 0.0)); });
+    accum = rgb2ycrcb.inverse() * (accum - offset);
     return mattersim::RGBHolder(accum[0], accum[1], accum[2]);
 }
+
 mattersim::RGBHolder
 mode_color(const std::vector<mattersim::RGBHolder> &colors) {
-    constexpr double bin_size = 5;
+    constexpr double num_bins = 255.0;
     auto rgb_count = std::map<
         Eigen::Vector3i, int,
         std::function<bool(const Eigen::Vector3i &, const Eigen::Vector3i &)>>{
@@ -34,8 +53,10 @@ mode_color(const std::vector<mattersim::RGBHolder> &colors) {
                     (a[1] < b[1] || (a[1] == b[1] && a[2] < b[2])));
         }};
     for (auto &c : colors) {
-        auto key = Eigen::Vector3i(c.r, c.b, c.g);
-        key.unaryExpr([](int i) { return static_cast<int>(i / bin_size); });
+        auto _c =
+            Eigen::Vector3d(c.r * num_bins, c.b * num_bins, c.g * num_bins);
+        auto key = _c.cast<int>();
+
         auto it = rgb_count.find(key);
         if (it == rgb_count.end()) {
             rgb_count.emplace(key, 1);
@@ -43,19 +64,25 @@ mode_color(const std::vector<mattersim::RGBHolder> &colors) {
             it->second += 1;
         }
     }
-    Eigen::Vector3i best_key;
+    Eigen::Vector3d best_key;
     int best_c = 0;
     for (auto &p : rgb_count) {
         if (p.second > best_c) {
-            best_key = p.first;
+            best_key = p.first.cast<double>();
             best_c = p.second;
         }
     }
 
-    best_key.unaryExpr([](int i) {
-        return std::max(0, std::min(static_cast<int>(i * bin_size), 255));
-    });
-    return mattersim::RGBHolder(best_key[0], best_key[1], best_key[2]);
+    return mattersim::RGBHolder(best_key[0] / num_bins, best_key[1] / num_bins,
+                                best_key[2] / num_bins);
+}
+
+template <class T> T read_and_inc_ptr(uint8_t **_ptr) {
+    T *ptr = reinterpret_cast<T *>(*_ptr);
+    T val = *ptr;
+    ptr += 1;
+    *_ptr = reinterpret_cast<uint8_t *>(ptr);
+    return val;
 }
 
 namespace mattersim {
@@ -101,7 +128,8 @@ void setupCubeMap(GLuint &texture, cv::Mat &xpos, cv::Mat &xneg, cv::Mat &ypos,
     setupCubeMap(texture);
     // use fast 4-byte alignment (default anyway) if possible
     glPixelStorei(GL_UNPACK_ALIGNMENT, (xneg.step & 3) ? 1 : 4);
-    // set length of one complete row in data (doesn't need to equal image.cols)
+    // set length of one complete row in data (doesn't need to equal
+    // image.cols)
     glPixelStorei(GL_UNPACK_ROW_LENGTH, xneg.step / xneg.elemSize());
     glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_RGB, xpos.rows,
                  xpos.cols, 0, GL_BGR, GL_UNSIGNED_BYTE, xpos.ptr());
@@ -181,7 +209,8 @@ void Simulator::init() {
         GLuint renderedTexture;
         glGenTextures(1, &renderedTexture);
 
-        // "Bind" the newly created texture : all future texture functions will
+        // "Bind" the newly created texture : all future texture functions
+        // will
         // modify this texture
         glBindTexture(GL_TEXTURE_2D, renderedTexture);
 
@@ -526,8 +555,8 @@ void Simulator::loadHouse(void) {
         }
     }
 
-#if 0
-    std::unordered_map<int, std::vector<int>> obj_id_to_segments;
+#if 1
+    std::unordered_map<int, int> segment_id_to_obj_id;
     for (int i = 0; i < nsegments; ++i) {
         std::string cmd, tmp;
         ifs >> cmd;
@@ -536,49 +565,58 @@ void Simulator::loadHouse(void) {
                 "MatterSim: Tried to read a segment, but got an \"" + cmd +
                 "\"");
         }
-        int segment_idx, object_idx;
-        ifs >> segment_idx >> object_idx;
-        obj_id_to_segments[object_idx].push_back(segment_idx);
+        int wat, segment_id, object_idx;
+        ifs >> wat >> object_idx >> segment_id;
+        if (this->objects.find(object_idx) != this->objects.end()) {
+            segment_id_to_obj_id[segment_id] = object_idx;
+        }
 
-        ifs >> tmp >> tmp;
         double d;
-        for (int j = 0; j < 14; ++j)
+        for (int j = 0; j < 15; ++j)
             ifs >> d;
     }
+#endif
 
-    std::ifstream ply_in(ply_filename, std::ios::in | std::ios::binary);
-    if (ply_in.fail()) {
-        throw std::invalid_argument("MatterSim: Could not open ply file: \"" +
-                                    ply_filename + "\"");
-    }
-    tinyply::PlyFile ply_file;
-    ply_file.parse_header(ply_in);
+#if 1
+    std::vector<ply::Vertex::Ptr> verts;
+    std::vector<ply::Face::Ptr> faces;
+    ply::read_file(ply_filename, verts, faces);
 
-    std::shared_ptr<tinyply::PlyData> ply_colors =
-        ply_file.request_properties_from_element("vertex",
-                                                 {"red", "green", "blue"});
-    ply_file.read(ply_in);
+    obj_id_to_triangles.clear();
+    obj_id_to_colors.clear();
+    obj_id_to_faces.clear();
+    for (const auto &f : faces) {
+        const int seg_id = f->mat_id;
+        if (segment_id_to_obj_id.find(seg_id) == segment_id_to_obj_id.end())
+            continue;
 
-    std::vector<RGBHolder> seg_colors(ply_colors->count);
-    std::memcpy(seg_colors.data(), ply_colors->buffer.get(),
-                ply_colors->buffer.size_bytes());
+        const int obj_id = segment_id_to_obj_id[seg_id];
 
-    std::unordered_map<int, std::vector<RGBHolder>> obj_id_to_segment_colors;
-    for (const auto &p : obj_id_to_segments) {
-        auto &k = p.first;
-        auto &segs = p.second;
+        auto &color_dst = obj_id_to_colors[obj_id];
+        auto &vert_dst = obj_id_to_triangles[obj_id];
+        obj_id_to_faces[obj_id].push_back(f);
 
-        auto it =
-            obj_id_to_segment_colors.emplace(k, std::vector<RGBHolder>()).first;
-        for (auto &s : segs) {
-            it->second.emplace_back(seg_colors[s]);
+        std::array<Eigen::Vector3f, 3> tri;
+        for (int j = 0; j < 3; ++j) {
+            const int idx = f->vert_inds[j];
+            if (idx >= verts.size()) {
+                throw std::invalid_argument(
+                    "Vertex idx is greater than number of vertices");
+            }
+            auto &v = verts[idx];
+            color_dst.emplace_back(v->r / 255.0, v->g / 255.0, v->b / 255.0);
+            tri[j] = Eigen::Vector3f(v->x, v->y, v->z);
         }
+        vert_dst.emplace_back(tri);
     }
 
-    for (const auto &p : obj_id_to_segment_colors) {
+    for (const auto &p : obj_id_to_colors) {
         auto &k = p.first;
         auto &colors = p.second;
-        this->objects[k]->color = mode_color(colors);
+        auto it = this->objects.find(k);
+        if (it != this->objects.end()) {
+            it->second->color = average_color(colors);
+        }
     }
 #endif
 }
@@ -606,26 +644,34 @@ void Simulator::set_location_by_object(const ObjectPtr obj) {
         throw std::domain_error(msg.str());
     }
     auto &centroid = obj->centroid;
+    if (this->regions.find(obj->region_id) == this->regions.cend()) {
+        throw std::runtime_error("MatterSim: Could not find region " +
+                                 obj->region_id);
+    }
+
     auto &region = this->regions[obj->region_id];
     LocationPtr closest_location = nullptr;
     double best_dist = 1e38;
-    constexpr double min_dist = 1.0;
-    for (auto &location : scanLocations[state->scanId]) {
-        if (location->included &&
-            region->viewpoints.find(location->viewpointId) !=
-                region->viewpoints.end()) {
-            Eigen::Vector3d pos(location->pos[0], location->pos[1],
-                                location->pos[2]);
+    double min_dist = 1.0;
+    while (closest_location == nullptr) {
+        for (auto &location : scanLocations[state->scanId]) {
+            if (location->included &&
+                region->viewpoints.find(location->viewpointId) !=
+                    region->viewpoints.end()) {
+                Eigen::Vector3d pos(location->pos[0], location->pos[1],
+                                    location->pos[2]);
 
-            double dist = (pos - centroid).norm();
-            double xy_dist = (Eigen::Vector2d(pos[0], pos[1]) -
-                              Eigen::Vector2d(centroid[0], centroid[1]))
-                                 .norm();
-            if (dist < best_dist && xy_dist >= min_dist) {
-                best_dist = dist;
-                closest_location = location;
+                double dist = (pos - centroid).norm();
+                double xy_dist = (Eigen::Vector2d(pos[0], pos[1]) -
+                                  Eigen::Vector2d(centroid[0], centroid[1]))
+                                     .norm();
+                if (dist < best_dist && xy_dist >= min_dist) {
+                    best_dist = dist;
+                    closest_location = location;
+                }
             }
         }
+        min_dist /= 2;
     }
 
     if (closest_location == nullptr) {
@@ -880,6 +926,115 @@ void Simulator::renderScene() {
     glPixelStorei(GL_PACK_ROW_LENGTH, img.step / img.elemSize());
     glReadPixels(0, 0, img.cols, img.rows, GL_BGR, GL_UNSIGNED_BYTE, img.data);
     cv::flip(img, img, 0);
+
+    if (current_object != nullptr) {
+        auto &pos = scanLocations[state->scanId][state->location->ix]->pos;
+        Eigen::Vector3f O(pos[0], pos[1], pos[2]);
+        cv::Mat_<cv::Vec3b> _img = img;
+
+        Eigen::Matrix4f proj = perspective<float>(
+            this->vfov, (double)this->width / (double)this->height, 0.1, 50);
+        Eigen::Matrix4f eig_view(
+            Eigen::Map<Eigen::Matrix<float, 4, 4, Eigen::ColMajor>>(
+                glm::value_ptr(View)));
+        eig_view.block<3, 1>(0, 3) = -eig_view.block<3, 3>(0, 0) * O;
+
+        Eigen::Matrix4f T = proj * eig_view;
+        static ObjectPtr old_obj = nullptr;
+        bool f = old_obj != current_object;
+        old_obj = current_object;
+
+#if 0
+        double n_points_out = 0.0;
+        for (const auto &tri : obj_id_to_triangles[current_object->id]) {
+            for (int i = 0; i < 3; ++i) {
+                auto pt = tri[i];
+                if (!current_object->bbox.is_in(pt)) {
+                    n_points_out += 1;
+                }
+
+                pt = (T * pt.homogeneous()).eval().hnormalized();
+                if (std::abs(pt[2]) > 1)
+                    continue;
+
+                pt += Eigen::Vector3d(1, 1, 0);
+                pt = (pt.array() *
+                      Eigen::Array3d(img.cols / 2.0, img.rows / 2.0, 1.0))
+                         .matrix();
+
+                const int x = pt[0], y = (img.rows - 1) - pt[1];
+
+                if (x >= 1 && x < (img.cols - 1) && y >= 1 &&
+                    y < (img.rows - 1))
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        for (int dy = -1; dy <= 1; ++dy) {
+                            _img(y + dy, x + dx) = cv::Vec3b(0, 255, 0);
+                        }
+                    }
+            }
+        }
+
+        if (f) {
+            std::cout << "\% of points not in bbox: "
+                      << n_points_out /
+                             (obj_id_to_triangles[current_object->id].size() *
+                              3) *
+                             1e2
+                      << std::endl;
+        }
+#endif
+#if 0
+
+        auto _c = current_object->bbox.corners();
+        _c = current_object->bbox.corners();
+        for (auto pt : *_c) {
+
+            pt = (T * pt.homogeneous()).eval().hnormalized();
+            if (std::abs(pt[2]) > 1)
+                continue;
+
+            pt += Eigen::Vector3d(1, 1, 0);
+            pt = (pt.array() *
+                  Eigen::Array3d(img.cols / 2.0, img.rows / 2.0, 1.0))
+                     .matrix();
+
+            const int x = pt[0], y = (img.rows - 1) - pt[1];
+            if (x >= 1 && x < (img.cols - 1) && y >= 1 && y < (img.rows - 1))
+                for (int dx = -1; dx <= 1; ++dx) {
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        _img(y + dy, x + dx) = cv::Vec3b(0, 0, 255);
+                    }
+                }
+        }
+#endif
+
+        std::vector<mattersim::RGBHolder> colors;
+        const double aspect_ratio = this->width / (double)this->height;
+        const double scale = std::tan(this->vfov / 2.0);
+
+        cv::Mat hit_map;
+        ray_tracing(obj_id_to_triangles[current_object->id],
+                    Eigen::Affine3f(eig_view).inverse().matrix(), O, img.rows,
+                    img.cols, scale, hit_map);
+        cv::Mat_<uint8_t> _hit_map = hit_map;
+
+        for (int j = 0; j < img.rows; ++j) {
+            for (int i = 0; i < img.cols; ++i) {
+                if (_hit_map(j, i)) {
+                    colors.emplace_back(_img(j, i)[2] / 255.0,
+                                        _img(j, i)[1] / 255.0,
+                                        _img(j, i)[0] / 255.0);
+                    _img(j, i) = cv::Vec3b(0, 0, 255);
+                }
+            }
+        }
+        if (f) {
+            auto __c = average_color(colors);
+            std::cout << __c.r << ", " << __c.g << ", " << __c.b << std::endl
+                      << std::endl;
+        }
+    }
+
     this->state->rgb = img;
     renderTimer.Stop();
 }
