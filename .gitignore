@@ -14,3 +14,4 @@
 /tasks/R2R/data/*.json
 /tasks/R2R/data/*_vocab.txt
 .autoenv*
+*.npy

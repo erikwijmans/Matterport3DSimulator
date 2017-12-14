@@ -29,15 +29,11 @@ Eigen::Matrix<T, 4, 4> perspective(double radf, double aspect, double zNear,
 
 mattersim::RGBHolder
 average_color(const std::vector<mattersim::RGBHolder> &colors) {
-    Eigen::Matrix3d rgb2ycrcb;
-    rgb2ycrcb << 0.299, 0.587, 0.144, -0.169, -0.331, 0.5, 0.5, -0.419, -0.081;
-    Eigen::Vector3d offset(0, 0.5, 0.5);
     Eigen::Vector3d accum = Eigen::Vector3d::Zero();
     for (auto &c : colors) {
-        accum += offset + rgb2ycrcb * Eigen::Vector3d(c.r, c.g, c.b);
+        accum += Eigen::Vector3d(c.r, c.g, c.b);
     }
     accum /= colors.size();
-    accum = rgb2ycrcb.inverse() * (accum - offset);
     return mattersim::RGBHolder(accum[0], accum[1], accum[2]);
 }
 
@@ -652,7 +648,8 @@ void Simulator::set_location_by_object(const ObjectPtr obj) {
     auto &region = this->regions[obj->region_id];
     LocationPtr closest_location = nullptr;
     double best_dist = 1e38;
-    double min_dist = 1.0;
+    double min_elevation = -0.5 * M_PI / 2.0;
+    constexpr double min_dist = 0.25;
     while (closest_location == nullptr) {
         for (auto &location : scanLocations[state->scanId]) {
             if (location->included &&
@@ -665,13 +662,22 @@ void Simulator::set_location_by_object(const ObjectPtr obj) {
                 double xy_dist = (Eigen::Vector2d(pos[0], pos[1]) -
                                   Eigen::Vector2d(centroid[0], centroid[1]))
                                      .norm();
-                if (dist < best_dist && xy_dist >= min_dist) {
+                Eigen::Vector3d gaze_vector =
+                    (centroid - Eigen::Vector3d(location->pos[0],
+                                                location->pos[1],
+                                                location->pos[2]))
+                        .normalized();
+                double elevation = std::atan2(
+                    gaze_vector[2],
+                    Eigen::Vector2d(gaze_vector[0], gaze_vector[1]).norm());
+                if (dist < best_dist && xy_dist > min_dist &&
+                    elevation > min_elevation) {
                     best_dist = dist;
                     closest_location = location;
                 }
             }
         }
-        min_dist /= 2;
+        min_elevation -= 0.1 * M_PI / 2.0;
     }
 
     if (closest_location == nullptr) {
@@ -927,6 +933,7 @@ void Simulator::renderScene() {
     glReadPixels(0, 0, img.cols, img.rows, GL_BGR, GL_UNSIGNED_BYTE, img.data);
     cv::flip(img, img, 0);
 
+#if 0
     if (current_object != nullptr) {
         auto &pos = scanLocations[state->scanId][state->location->ix]->pos;
         Eigen::Vector3f O(pos[0], pos[1], pos[2]);
@@ -1034,7 +1041,7 @@ void Simulator::renderScene() {
                       << std::endl;
         }
     }
-
+#endif
     this->state->rgb = img;
     renderTimer.Stop();
 }
