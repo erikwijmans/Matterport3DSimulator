@@ -36,10 +36,16 @@ from sklearn.metrics import silhouette_score
 
 
 def kmeans(data, n=19):
-    centroids, labels, interia = cluster.k_means(
-        data, n, n_init=int(1e3), max_iter=int(1e6), precompute_distances=True)
+    model = cluster.KMeans(
+        n_clusters=n,
+        n_init=int(1e3),
+        max_iter=int(1e6),
+        precompute_distances=True)
+    model.fit(data)
+    labels = model.predict(data)
 
-    return centroids, labels, silhouette_score(data, labels)
+    return model.cluster_centers_, labels, silhouette_score(data,
+                                                            labels), model
 
 
 from sklearn.mixture import GaussianMixture
@@ -51,7 +57,7 @@ def gmm(data, n=19):
 
     labels = gmm.predict(data)
 
-    return gmm.means_, gmm.predict(data), silhouette_score(data, labels)
+    return gmm.means_, gmm.predict(data), silhouette_score(data, labels), gmm
 
 
 def dbscan(data):
@@ -60,6 +66,7 @@ def dbscan(data):
 
     return dbscan.components_, dbscan.labels_, silhouette_score(
         data, dbscan.labels_)
+
 
 def clusterer(data):
     #  centroids, _, score = dbscan(data)
@@ -76,8 +83,7 @@ def clusterer(data):
 
 
 print("Clustering in RGB space")
-clusterer(all_colors)
-
+#  clusterer(all_colors)
 
 rgb2ycbcr = np.array([[0.299, 0.587, 0.114], [-0.169, -0.331, 0.5],
                       [0.5, -0.419, -0.081]])
@@ -85,4 +91,24 @@ rgb2ycbcr = np.array([[0.299, 0.587, 0.114], [-0.169, -0.331, 0.5],
 print("Clustering in CbCr space")
 ycbcr = all_colors.dot(rgb2ycbcr.T)
 cbcr = ycbcr[:, 1:]
-clusterer(cbcr)
+#  clusterer(cbcr)
+
+km_model = kmeans(all_colors)[-1]
+
+import json
+for name in tqdm(glob.glob("./connectivity/*.json")):
+    file_name = osp.split(name)[1]
+    scan_id = file_name.split("_")[0]
+
+    sim.newEpisode(scan_id, "", 0, 0)
+    objects = sim.get_objects()
+    obj_id_to_color = {}
+    for obj_id in list(objects):
+        o = objects[obj_id]
+        color = np.array([[o.color.r, o.color.g, o.color.b]])
+
+        label = km_model.predict(color)
+        obj_id_to_color[int(obj_id)] = int(label[0])
+
+    with open("./color/{}_colors.json".format(scan_id), "w+") as f:
+        json.dump(obj_id_to_color, f)

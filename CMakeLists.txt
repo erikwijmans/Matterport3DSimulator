@@ -15,7 +15,6 @@ include_directories("${PROJECT_SOURCE_DIR}/include")
 
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
-find_package(CUDA REQUIRED)
 
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
@@ -28,16 +27,13 @@ else()
   set(GL_LIBS ${OPENGL_LIBRARIES} ${GLEW_LIBRARIES})
 endif()
 
-cuda_add_library(RayTracer SHARED src/lib/RayTracer.cu)
-target_link_libraries(RayTracer ${CUDA_LIBRARIES} ${OpenCV_LIBS})
-cotire(RayTracer)
 
 add_library(MatterSim SHARED src/lib/MatterSim.cpp src/lib/Benchmark.cpp src/lib/ReadPly.cpp)
 if(OSMESA_RENDERING)
   target_compile_definitions(MatterSim PUBLIC "-DOSMESA_RENDERING")
 endif()
 target_include_directories(MatterSim PRIVATE ${JSONCPP_INCLUDE_DIRS})
-target_link_libraries(MatterSim RayTracer ${JSONCPP_LIBRARIES} ${OpenCV_LIBS} ${GL_LIBS})
+target_link_libraries(MatterSim ${JSONCPP_LIBRARIES} ${OpenCV_LIBS} ${GL_LIBS})
 cotire(MatterSim)
 
 add_executable(tests src/test/main.cpp)

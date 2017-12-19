@@ -9,22 +9,35 @@
 #include "ReadPly.hpp"
 #include <json/json.h>
 
-template <class T>
-Eigen::Matrix<T, 4, 4> perspective(double radf, double aspect, double zNear,
-                                   double zFar) {
-    typedef Eigen::Matrix<T, 4, 4> Matrix4;
+struct GLVertex {
+    GLfloat pos[3];
+    GLubyte color[3];
+};
 
-    assert(aspect > 0);
-    assert(zFar > zNear);
+cv::Vec3b encode_number_as_color(int num, int low, int high) {
+    const double bin_size = (high - low) / 3.0;
+    num -= low;
 
-    double tanHalfFovy = tan(radf / 2.0);
-    Matrix4 res = Matrix4::Zero();
-    res(0, 0) = 1.0 / (aspect * tanHalfFovy);
-    res(1, 1) = 1.0 / (tanHalfFovy);
-    res(2, 2) = -(zFar + zNear) / (zFar - zNear);
-    res(3, 2) = -1.0;
-    res(2, 3) = -(2.0 * zFar * zNear) / (zFar - zNear);
-    return res;
+    cv::Vec3b c;
+    c[0] = cv::saturate_cast<uchar>(num * 255.0 / bin_size);
+    c[1] = cv::saturate_cast<uchar>((num - bin_size) * 255.0 / bin_size);
+    c[2] = cv::saturate_cast<uchar>((num - 2.0 * bin_size) * 255.0 / bin_size);
+
+    return c;
+}
+
+int decode_number_from_color(const cv::Vec3b &c, int low, int high) {
+    const double bin_size = (high - low) / 3.0;
+
+    int num;
+    if (c[2] < 255.0 / bin_size / 2.0 && c[1] < 255.0 / bin_size / 2.0)
+        num = std::round(c[0] / 255.0 * bin_size);
+    else if (c[2] < 255.0 / bin_size / 2.0)
+        num = std::round(c[1] / 255.0 * bin_size + bin_size);
+    else
+        num = std::round(c[2] / 255.0 * bin_size + 2.0 * bin_size);
+
+    return num + low;
 }
 
 mattersim::RGBHolder
@@ -71,14 +84,6 @@ mode_color(const std::vector<mattersim::RGBHolder> &colors) {
 
     return mattersim::RGBHolder(best_key[0] / num_bins, best_key[1] / num_bins,
                                 best_key[2] / num_bins);
-}
-
-template <class T> T read_and_inc_ptr(uint8_t **_ptr) {
-    T *ptr = reinterpret_cast<T *>(*_ptr);
-    T val = *ptr;
-    ptr += 1;
-    *_ptr = reinterpret_cast<uint8_t *>(ptr);
-    return val;
 }
 
 namespace mattersim {
@@ -222,6 +227,19 @@ void Simulator::init() {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, renderedTexture, 0);
 
+        GLuint depth_texture;
+        glGenTextures(1, &depth_texture);
+        glBindTexture(GL_TEXTURE_2D, depth_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, width, height, 0,
+                     GL_DEPTH_COMPONENT, GL_FLOAT, 0);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+        // Set "depth_texture" as our depth attachement
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D, depth_texture, 0);
+
         // Set the list of draw buffers.
         GLenum DrawBuffers[1] = {GL_COLOR_ATTACHMENT0};
         glDrawBuffers(1, DrawBuffers); // "1" is the size of DrawBuffers
@@ -235,7 +253,7 @@ void Simulator::init() {
 
         // set our viewport, clear color and depth, and enable depth testing
         glViewport(0, 0, this->width, this->height);
-        glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+        glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
         glClearDepth(1.0f);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
@@ -263,13 +281,9 @@ void Simulator::init() {
         glGetShaderInfoLog(glShaderV, 2048, &vlength, vlog);
         glGetShaderInfoLog(glShaderF, 2048, &flength, flog);
 
-        // grab the pvm matrix and vertex location from our shader program
-        PVM = glGetUniformLocation(glProgram, "PVM");
-        vertex = glGetAttribLocation(glProgram, "vertex");
-
         // these won't change
         Projection = glm::perspective((float)vfov, (float)width / (float)height,
-                                      0.1f, 100.0f);
+                                      0.1f, 20.0f);
         Scale = glm::scale(glm::mat4(1.0f),
                            glm::vec3(10, 10, 10)); // Scale cube to 10m
 
@@ -282,13 +296,34 @@ void Simulator::init() {
         glBindBuffer(GL_ARRAY_BUFFER, vbo_cube_vertices);
         glBufferData(GL_ARRAY_BUFFER, sizeof(cube_vertices), cube_vertices,
                      GL_STATIC_DRAW);
-        glEnableVertexAttribArray(vertex);
-        glVertexAttribPointer(vertex, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
         glGenBuffers(1, &ibo_cube_indices);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_cube_indices);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(cube_indices),
                      cube_indices, GL_STATIC_DRAW);
+
+        // load our shaders and compile them.. create a program and link it
+        mesh_glShaderV = glCreateShader(GL_VERTEX_SHADER);
+        mesh_glShaderF = glCreateShader(GL_FRAGMENT_SHADER);
+        vShaderSource = loadFile("src/lib/mesh_vertex.sh");
+        fShaderSource = loadFile("src/lib/mesh_fragment.sh");
+        glShaderSource(mesh_glShaderV, 1, &vShaderSource, NULL);
+        glShaderSource(mesh_glShaderF, 1, &fShaderSource, NULL);
+        delete[] vShaderSource;
+        delete[] fShaderSource;
+        glCompileShader(mesh_glShaderV);
+        glCompileShader(mesh_glShaderF);
+        mesh_glProgram = glCreateProgram();
+        glAttachShader(mesh_glProgram, mesh_glShaderV);
+        glAttachShader(mesh_glProgram, mesh_glShaderF);
+        glLinkProgram(mesh_glProgram);
+        glUseProgram(mesh_glProgram);
+
+        glGetShaderInfoLog(mesh_glShaderV, 2048, &vlength, vlog);
+        glGetShaderInfoLog(mesh_glShaderF, 2048, &flength, flog);
+
+        glGenBuffers(1, &vbo_mesh);
+
     } else {
         // no rendering, e.g. for unit testing
         state->rgb.setTo(cv::Scalar(0, 0, 0));
@@ -347,6 +382,24 @@ void Simulator::loadLocationGraph() {
                    unobstructed,
                    cubemap_texture};
         scanLocations[state->scanId].push_back(std::make_shared<Location>(l));
+    }
+}
+
+void Simulator::loadColors(void) {
+    Json::Value root;
+    auto colors_file =
+        navGraphPath + "/../color/" + state->scanId + "_colors.json";
+    std::ifstream ifs(colors_file, std::ifstream::in);
+    if (ifs.fail()) {
+        throw std::invalid_argument("MatterSim: Could not open colors file: " +
+                                    colors_file + ", is scan id valid?");
+    }
+    ifs >> root;
+    for (auto &member : root.getMemberNames()) {
+        int obj_id = std::stoi(member);
+        int color_id = root[member].asInt();
+
+        this->objects[obj_id]->color_id = color_id;
     }
 }
 
@@ -435,12 +488,10 @@ void Simulator::loadHouse(void) {
         for (int j = 0; j < 4 + 1; ++j)
             ifs >> d;
 
-        if (region_label != "Z" and region_label != "-") {
-            this->regions.emplace(region_idx,
-                                  std::make_shared<Region>(
-                                      region_idx, level_idx, region_label, pos,
-                                      BoundingBox::AxisAligned(lo, hi)));
-        }
+        this->regions.emplace(
+            region_idx,
+            std::make_shared<Region>(region_idx, level_idx, region_label, pos,
+                                     BoundingBox::AxisAligned(lo, hi)));
     }
 
     {
@@ -484,6 +535,7 @@ void Simulator::loadHouse(void) {
     }
 
     std::unordered_map<int, std::string> cat_idx_to_mpcat40;
+    std::unordered_map<int, int> cat_idx_to_mpcat40_id;
     std::unordered_map<int, std::string> cat_idx_to_name;
     for (int i = 0; i < ncategories; ++i) {
         std::string tmp, cmd;
@@ -508,6 +560,7 @@ void Simulator::loadHouse(void) {
             ifs >> d;
 
         cat_idx_to_mpcat40.emplace(cat_idx, mpcat40_name);
+        cat_idx_to_mpcat40_id.emplace(cat_idx, mpcat40_id);
         cat_idx_to_name.emplace(cat_idx, label_name);
     }
 
@@ -538,13 +591,13 @@ void Simulator::loadHouse(void) {
 
         std::string &fine_class = cat_idx_to_name[category_idx],
                     &coarse_class = cat_idx_to_mpcat40[category_idx];
-        if (this->regions.find(region_idx) != this->regions.end() &&
-            fine_class.length() != 0 && coarse_class.length() != 0) {
+        if (this->regions.find(region_idx) != this->regions.end()) {
             BoundingBox bbox(centroid, a0, a1, radii);
 
             ObjectPtr o =
                 std::make_shared<Object>(object_idx, region_idx, fine_class,
                                          coarse_class, centroid, bbox);
+            o->cat_id = cat_idx_to_mpcat40_id[category_idx];
 
             this->objects.emplace(object_idx, o);
             this->regions.at(region_idx)->objects.emplace(object_idx, o);
@@ -581,6 +634,8 @@ void Simulator::loadHouse(void) {
     obj_id_to_triangles.clear();
     obj_id_to_colors.clear();
     obj_id_to_faces.clear();
+    triangles.clear();
+    triangle_cat_id.clear();
     for (const auto &f : faces) {
         const int seg_id = f->mat_id;
         if (segment_id_to_obj_id.find(seg_id) == segment_id_to_obj_id.end())
@@ -592,7 +647,7 @@ void Simulator::loadHouse(void) {
         auto &vert_dst = obj_id_to_triangles[obj_id];
         obj_id_to_faces[obj_id].push_back(f);
 
-        std::array<Eigen::Vector3f, 3> tri;
+        auto tri = std::make_shared<std::array<Eigen::Vector3f, 3>>();
         for (int j = 0; j < 3; ++j) {
             const int idx = f->vert_inds[j];
             if (idx >= verts.size()) {
@@ -601,8 +656,10 @@ void Simulator::loadHouse(void) {
             }
             auto &v = verts[idx];
             color_dst.emplace_back(v->r / 255.0, v->g / 255.0, v->b / 255.0);
-            tri[j] = Eigen::Vector3f(v->x, v->y, v->z);
+            tri->at(j) = Eigen::Vector3f(v->x, v->y, v->z);
         }
+        triangles.emplace_back(tri);
+        triangle_cat_id.emplace_back(this->objects[obj_id]->cat_id);
         vert_dst.emplace_back(tri);
     }
 
@@ -614,6 +671,27 @@ void Simulator::loadHouse(void) {
             it->second->color = average_color(colors);
         }
     }
+
+    GLVertex *local_vbo = new GLVertex[triangles.size() * 3];
+    for (int i = 0; i < triangles.size(); ++i) {
+        auto &tri = triangles[i];
+        const int cat_id = triangle_cat_id[i];
+        auto c = encode_number_as_color(cat_id, 0, 41);
+
+        for (int j = 0; j < 3; ++j) {
+            std::memcpy(&local_vbo[i * 3 + j].pos, tri->at(j).data(),
+                        3 * sizeof(float));
+            std::memcpy(&local_vbo[i * 3 + j].color, c.val,
+                        3 * sizeof(GLubyte));
+        }
+    }
+
+    glDeleteBuffers(1, &vbo_mesh);
+    glGenBuffers(1, &vbo_mesh);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_mesh);
+    glBufferData(GL_ARRAY_BUFFER, triangles.size() * 3 * sizeof(GLVertex),
+                 local_vbo, GL_STATIC_DRAW);
+    delete[] local_vbo;
 #endif
 }
 
@@ -635,9 +713,7 @@ const std::unordered_map<int, RegionPtr> &Simulator::get_regions(void) {
 
 void Simulator::set_location_by_object(const ObjectPtr obj) {
     if (!initialized) {
-        std::stringstream msg;
-        msg << "MatterSim: Simulator is not initialized!";
-        throw std::domain_error(msg.str());
+        init();
     }
     auto &centroid = obj->centroid;
     if (this->regions.find(obj->region_id) == this->regions.cend()) {
@@ -840,6 +916,7 @@ void Simulator::newEpisode(const std::string &scanId,
         state->scanId = scanId;
         loadLocationGraph();
         loadHouse();
+        loadColors();
     }
     int ix = -1;
     if (viewpointId.empty()) {
@@ -896,32 +973,50 @@ void Simulator::newEpisode(const std::string &scanId,
 
 SimStatePtr Simulator::getState() { return this->state; }
 
-void Simulator::renderScene() {
-    renderTimer.Start();
+void Simulator::render_rgb() {
+    glUseProgram(glProgram);
+    GLint PVM = glGetUniformLocation(glProgram, "PVM");
+    GLint vertex = glGetAttribLocation(glProgram, "vertex");
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    // Scale and move the cubemap model into position
-    Model = scanLocations[state->scanId][state->location->ix]->rot * Scale;
-    // Opengl camera looking down -z axis. Rotate around x by 90deg (now
-    // looking
-    // down +y). Keep rotating for - elevation.
-    RotateX = glm::rotate(glm::mat4(1.0f),
-                          -(float)M_PI / 2.0f - (float)state->elevation,
-                          glm::vec3(1.0f, 0.0f, 0.0f));
-    // Rotate camera for heading, positive heading will turn right.
-    View = glm::rotate(RotateX, (float)state->heading,
-                       glm::vec3(0.0f, 0.0f, 1.0f));
-    glm::mat4 M = Projection * View * Model;
-    glUniformMatrix4fv(PVM, 1, GL_FALSE, glm::value_ptr(M));
+
 #ifndef OSMESA_RENDERING
     // Render to our framebuffer
     glBindFramebuffer(GL_FRAMEBUFFER, FramebufferName);
 #endif
     glViewport(0, 0, width, height);
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_cube_vertices);
+    glEnableVertexAttribArray(vertex);
+    glVertexAttribPointer(vertex, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_cube_indices);
+
     glBindTexture(
         GL_TEXTURE_CUBE_MAP,
         scanLocations[state->scanId][state->location->ix]->cubemap_texture);
+
+    glm::mat4 Model =
+        scanLocations[state->scanId][state->location->ix]->rot * Scale;
+    // Opengl camera looking down -z axis. Rotate around x by 90deg (now
+    // looking
+    // down +y). Keep rotating for - elevation.
+    glm::mat4 RotateX = glm::rotate(
+        glm::mat4(1.0f), -(float)M_PI / 2.0f - (float)state->elevation,
+        glm::vec3(1.0f, 0.0f, 0.0f));
+    // Rotate camera for heading, positive heading will turn right.
+    glm::mat4 View = glm::rotate(RotateX, (float)state->heading,
+                                 glm::vec3(0.0f, 0.0f, 1.0f));
+
+    glm::mat4 M = Projection * View * Model;
+    glUniformMatrix4fv(PVM, 1, GL_FALSE, glm::value_ptr(M));
+
     glDrawElements(GL_QUADS, sizeof(cube_indices) / sizeof(GLushort),
                    GL_UNSIGNED_SHORT, 0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    glDisableVertexAttribArray(vertex);
 
     cv::Mat img(height, width, CV_8UC3);
     // use fast 4-byte alignment (default anyway) if possible
@@ -933,101 +1028,96 @@ void Simulator::renderScene() {
     glReadPixels(0, 0, img.cols, img.rows, GL_BGR, GL_UNSIGNED_BYTE, img.data);
     cv::flip(img, img, 0);
 
+    this->state->rgb = img;
+}
+
+void Simulator::render_mesh() {
+    glUseProgram(mesh_glProgram);
+    GLint mesh_PVM = glGetUniformLocation(mesh_glProgram, "PVM");
+    GLint mesh_vertex = glGetAttribLocation(mesh_glProgram, "vertex");
+    GLint mesh_color = glGetAttribLocation(mesh_glProgram, "color");
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+#ifndef OSMESA_RENDERING
+    // Render to our framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferName);
+#endif
+    glViewport(0, 0, width, height);
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_mesh);
+    glEnableVertexAttribArray(mesh_vertex);
+    glVertexAttribPointer(mesh_vertex, 3, GL_FLOAT, GL_FALSE, sizeof(GLVertex),
+                          reinterpret_cast<void *>(offsetof(GLVertex, pos)));
+    glEnableVertexAttribArray(mesh_color);
+    glVertexAttribPointer(mesh_color, 3, GL_UNSIGNED_BYTE, GL_TRUE,
+                          sizeof(GLVertex),
+                          reinterpret_cast<void *>(offsetof(GLVertex, color)));
+
+    auto &pos = scanLocations[state->scanId][state->location->ix]->pos;
+    glm::mat4 Model = glm::translate(glm::mat4(1.0f), -pos);
+    glm::mat4 RotateX = glm::rotate(
+        glm::mat4(1.0f), -(float)M_PI / 2.0f - (float)state->elevation,
+        glm::vec3(1.0f, 0.0f, 0.0f));
+    glm::mat4 View = glm::rotate(RotateX, (float)state->heading,
+                                 glm::vec3(0.0f, 0.0f, 1.0f));
+
+    glm::mat4 M = Projection * View * Model;
+    glUniformMatrix4fv(mesh_PVM, 1, GL_FALSE, glm::value_ptr(M));
+
+    glDrawArrays(GL_TRIANGLES, 0, triangles.size() * 3);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDisableVertexAttribArray(mesh_vertex);
+    glDisableVertexAttribArray(mesh_color);
+
+    cv::Mat semseg_img(height, width, CV_8UC3), depth(height, width, CV_32FC1);
+    glPixelStorei(GL_PACK_ALIGNMENT, (semseg_img.step & 3) ? 1 : 4);
+    glPixelStorei(GL_PACK_ROW_LENGTH, semseg_img.step / semseg_img.elemSize());
+    glReadPixels(0, 0, semseg_img.cols, semseg_img.rows, GL_BGR,
+                 GL_UNSIGNED_BYTE, semseg_img.data);
+    cv::flip(semseg_img, semseg_img, 0);
+    cv::Mat_<int> semseg(height, width);
+    cv::Mat_<cv::Vec3b> _semseg_img = semseg_img;
+
+    constexpr int num_cats = 40;
+    constexpr int bin_size = num_cats / 3;
+    for (int j = 0; j < height; ++j) {
+        for (int i = 0; i < width; ++i) {
+            int r = _semseg_img(j, i)[2];
+            int g = _semseg_img(j, i)[1];
+            int b = _semseg_img(j, i)[0];
+            semseg(j, i) = decode_number_from_color(cv::Vec3b(r, g, b), 0, 41);
+        }
+    }
+
+    glPixelStorei(GL_PACK_ALIGNMENT, (depth.step & 3) ? 1 : 4);
+    glPixelStorei(GL_PACK_ROW_LENGTH, depth.step / depth.elemSize());
+    glReadPixels(0, 0, depth.cols, depth.rows, GL_DEPTH_COMPONENT, GL_FLOAT,
+                 depth.data);
+    cv::flip(depth, depth, 0);
+
+    this->state->depth = depth;
+    this->state->semseg = semseg;
+}
+
+void Simulator::renderScene() {
+    renderTimer.Start();
+    render_rgb();
+
+    cv::Mat3b _img = this->state->rgb;
+    render_mesh();
 #if 0
     if (current_object != nullptr) {
-        auto &pos = scanLocations[state->scanId][state->location->ix]->pos;
-        Eigen::Vector3f O(pos[0], pos[1], pos[2]);
-        cv::Mat_<cv::Vec3b> _img = img;
-
-        Eigen::Matrix4f proj = perspective<float>(
-            this->vfov, (double)this->width / (double)this->height, 0.1, 50);
-        Eigen::Matrix4f eig_view(
-            Eigen::Map<Eigen::Matrix<float, 4, 4, Eigen::ColMajor>>(
-                glm::value_ptr(View)));
-        eig_view.block<3, 1>(0, 3) = -eig_view.block<3, 3>(0, 0) * O;
-
-        Eigen::Matrix4f T = proj * eig_view;
-        static ObjectPtr old_obj = nullptr;
-        bool f = old_obj != current_object;
-        old_obj = current_object;
-
-#if 0
-        double n_points_out = 0.0;
-        for (const auto &tri : obj_id_to_triangles[current_object->id]) {
-            for (int i = 0; i < 3; ++i) {
-                auto pt = tri[i];
-                if (!current_object->bbox.is_in(pt)) {
-                    n_points_out += 1;
-                }
-
-                pt = (T * pt.homogeneous()).eval().hnormalized();
-                if (std::abs(pt[2]) > 1)
-                    continue;
-
-                pt += Eigen::Vector3d(1, 1, 0);
-                pt = (pt.array() *
-                      Eigen::Array3d(img.cols / 2.0, img.rows / 2.0, 1.0))
-                         .matrix();
-
-                const int x = pt[0], y = (img.rows - 1) - pt[1];
-
-                if (x >= 1 && x < (img.cols - 1) && y >= 1 &&
-                    y < (img.rows - 1))
-                    for (int dx = -1; dx <= 1; ++dx) {
-                        for (int dy = -1; dy <= 1; ++dy) {
-                            _img(y + dy, x + dx) = cv::Vec3b(0, 255, 0);
-                        }
-                    }
-            }
-        }
-
-        if (f) {
-            std::cout << "\% of points not in bbox: "
-                      << n_points_out /
-                             (obj_id_to_triangles[current_object->id].size() *
-                              3) *
-                             1e2
-                      << std::endl;
-        }
-#endif
-#if 0
-
-        auto _c = current_object->bbox.corners();
-        _c = current_object->bbox.corners();
-        for (auto pt : *_c) {
-
-            pt = (T * pt.homogeneous()).eval().hnormalized();
-            if (std::abs(pt[2]) > 1)
-                continue;
-
-            pt += Eigen::Vector3d(1, 1, 0);
-            pt = (pt.array() *
-                  Eigen::Array3d(img.cols / 2.0, img.rows / 2.0, 1.0))
-                     .matrix();
-
-            const int x = pt[0], y = (img.rows - 1) - pt[1];
-            if (x >= 1 && x < (img.cols - 1) && y >= 1 && y < (img.rows - 1))
-                for (int dx = -1; dx <= 1; ++dx) {
-                    for (int dy = -1; dy <= 1; ++dy) {
-                        _img(y + dy, x + dx) = cv::Vec3b(0, 0, 255);
-                    }
-                }
-        }
-#endif
+        static ObjectPtr prev_obj = nullptr;
+        bool f = prev_obj != current_object;
+        prev_obj = current_object;
 
         std::vector<mattersim::RGBHolder> colors;
-        const double aspect_ratio = this->width / (double)this->height;
-        const double scale = std::tan(this->vfov / 2.0);
 
-        cv::Mat hit_map;
-        ray_tracing(obj_id_to_triangles[current_object->id],
-                    Eigen::Affine3f(eig_view).inverse().matrix(), O, img.rows,
-                    img.cols, scale, hit_map);
-        cv::Mat_<uint8_t> _hit_map = hit_map;
-
-        for (int j = 0; j < img.rows; ++j) {
-            for (int i = 0; i < img.cols; ++i) {
-                if (_hit_map(j, i)) {
+        cv::Mat_<int> semseg = this->state->semseg;
+        for (int j = 0; j < _img.rows; ++j) {
+            for (int i = 0; i < _img.cols; ++i) {
+                if (semseg(j, i) == current_object->cat_id) {
                     colors.emplace_back(_img(j, i)[2] / 255.0,
                                         _img(j, i)[1] / 255.0,
                                         _img(j, i)[0] / 255.0);
@@ -1042,7 +1132,6 @@ void Simulator::renderScene() {
         }
     }
 #endif
-    this->state->rgb = img;
     renderTimer.Stop();
 }
 
@@ -1114,6 +1203,14 @@ void Simulator::close() {
             glDeleteShader(glShaderF);
             glDeleteShader(glShaderV);
             glDeleteProgram(glProgram);
+
+            glDeleteBuffers(1, &vbo_mesh);
+            // detach shaders from program and release
+            glDetachShader(mesh_glProgram, mesh_glShaderF);
+            glDetachShader(mesh_glProgram, mesh_glShaderV);
+            glDeleteShader(mesh_glShaderF);
+            glDeleteShader(mesh_glShaderV);
+            glDeleteProgram(mesh_glProgram);
 #ifdef OSMESA_RENDERING
             free(buffer);
             buffer = NULL;

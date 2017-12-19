@@ -39,6 +39,13 @@ public:
     if (renderingEnabled) {
       npy_intp colorShape[3]{state->rgb.rows, state->rgb.cols, 3};
       rgb = matToNumpyArray(3, colorShape, NPY_UBYTE, (void *)state->rgb.data);
+
+      semseg =
+          matToNumpyArray(3, colorShape, NPY_UBYTE, (void *)state->semseg.data);
+
+      npy_intp depthShape[2]{state->rgb.rows, state->rgb.cols};
+      rgb = matToNumpyArray(2, depthShape, NPY_FLOAT32,
+                            (void *)state->depth.data);
     }
     scanId = state->scanId;
     for (auto viewpoint : state->navigableLocations) {
@@ -48,7 +55,7 @@ public:
   std::string scanId;
   unsigned int step;
   unsigned int viewIndex;
-  py::object rgb;
+  py::object rgb, depth, semseg;
   ViewPointPython location;
   double heading;
   double elevation;
@@ -163,6 +170,8 @@ PYBIND11_MODULE(MatterSim, m) {
       .def_readonly("scanId", &SimStatePython::scanId)
       .def_readonly("step", &SimStatePython::step)
       .def_readonly("rgb", &SimStatePython::rgb)
+      .def_readonly("depth", &SimStatePython::depth)
+      .def_readonly("semseg", &SimStatePython::semseg)
       .def_readonly("location", &SimStatePython::location)
       .def_readonly("heading", &SimStatePython::heading)
       .def_readonly("elevation", &SimStatePython::elevation)
@@ -185,6 +194,8 @@ PYBIND11_MODULE(MatterSim, m) {
       .def_readonly("coarse_class", &Object::coarse_class)
       .def_readonly("fine_class", &Object::fine_class)
       .def_readonly("color", &Object::color)
+      .def_readonly("color_id", &Object::color_id)
+      .def_readonly("cat_id", &Object::cat_id)
       .def_readonly("centroid", &Object::centroid)
       .def_readonly("bbox", &Object::bbox);
   py::class_<Region, RegionPtr>(m, "SimRegion")

@@ -66,6 +66,8 @@ struct SimState {
   cv::Mat rgb;
   //! Depth image taken from the agent's current viewpoint (not implemented)
   cv::Mat depth;
+  //! Semseg image taken from the agent's current viewpoint
+  cv::Mat semseg;
   //! Agent's current 3D location
   ViewpointPtr location;
   //! Agent's current camera heading in radians
@@ -163,6 +165,9 @@ public:
   Eigen::Vector3d centroid;
   //! Bounding box in world coordinates
   BoundingBox bbox;
+  //! Color cluster number
+  int color_id;
+  int cat_id;
 };
 
 typedef std::shared_ptr<Object> ObjectPtr;
@@ -346,12 +351,15 @@ private:
   const double elevationIncrement =
       M_PI / 6.0; // 30 degrees discretized up/down
   void loadHouse(void);
+  void loadColors(void);
   void loadLocationGraph();
   void clearLocationGraph();
   void populateNavigable();
   void loadTexture(int locationId);
   void setHeadingElevation(double heading, double elevation);
   void renderScene();
+  void render_rgb();
+  void render_mesh();
 #ifdef OSMESA_RENDERING
   void *buffer;
   OSMesaContext ctx;
@@ -368,18 +376,18 @@ private:
   double minElevation;
   double maxElevation;
   glm::mat4 Projection;
-  glm::mat4 View;
-  glm::mat4 Model;
   glm::mat4 Scale;
-  glm::mat4 RotateX;
-  glm::mat4 RotateZ;
-  GLint PVM;
-  GLint vertex;
   GLuint ibo_cube_indices;
   GLuint vbo_cube_vertices;
   GLuint glProgram;
   GLuint glShaderV;
   GLuint glShaderF;
+
+  GLuint vbo_mesh;
+  GLuint mesh_glProgram;
+  GLuint mesh_glShaderV;
+  GLuint mesh_glShaderF;
+
   std::string datasetPath;
   std::string navGraphPath;
   std::unordered_map<std::string, std::vector<LocationPtr>> scanLocations;
@@ -387,8 +395,11 @@ private:
   std::unordered_map<int, ObjectPtr> objects;
   ObjectPtr current_object = nullptr;
   std::unordered_map<int, std::vector<ply::Face::Ptr>> obj_id_to_faces;
-  std::unordered_map<int, std::vector<std::array<Eigen::Vector3f, 3>>>
+  std::unordered_map<
+      int, std::vector<std::shared_ptr<std::array<Eigen::Vector3f, 3>>>>
       obj_id_to_triangles;
+  std::vector<std::shared_ptr<std::array<Eigen::Vector3f, 3>>> triangles;
+  std::vector<int> triangle_cat_id;
   std::unordered_map<int, std::vector<RGBHolder>> obj_id_to_colors;
 
   std::default_random_engine generator;
